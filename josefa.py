@@ -3,17 +3,25 @@
  AB TEST SIMULATOR | Growth & Marketing Digital — Executive Edition
  App interactiva en Streamlit para simular y analizar Tests A/B de campañas.
 
- SISTEMA DE DISEÑO
- ------------------
- Paleta:    grafito (#0b0e14) · superficie (#141922) · borde (#262c3a)
-            texto (#eef0f5) · emerald=mejora (#34d399) · coral=empeora (#f25f5c)
- Tipografía: Space Grotesk (títulos) · Inter (cuerpo) · JetBrains Mono (cifras)
- Elemento distintivo: banner "Veredicto en vivo" — resume la decisión de
-            negocio en una sola línea, con las cifras clave en mono grande.
+ FIXES DE ESTA VERSIÓN
+ -----------------------
+ 1) BUG DE RENDERIZADO: el HTML de la tabla se armaba con líneas en blanco
+    e indentación dentro del f-string. El parser Markdown de Streamlit
+    interpretaba eso como un bloque de código (por eso se veían las
+    etiquetas <tr> literales). Ahora TODO el HTML dinámico se arma en una
+    sola línea, sin saltos de línea ni indentación, para que siempre se
+    renderice como HTML real.
+ 2) "ESTADO BASE" como 4ta opción del mismo selector: ya no es una fila
+    aparte y fija; ahora vive junto a las 3 estrategias, así un solo
+    control decide qué se compara y todo se recalcula igual para las 4.
+ 3) Slider de "Presupuesto adicional" de vuelta, aplicado sobre la opción
+    que esté seleccionada en ese momento (solo afecta la vista en vivo,
+    no los datos "oficiales" de la tabla comparativa).
 ================================================================================
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ==============================================================================
 # 1. CONFIGURACIÓN GENERAL DE LA PÁGINA
@@ -27,10 +35,6 @@ st.set_page_config(
 
 # ==============================================================================
 # 2. SISTEMA DE DISEÑO (CSS GLOBAL)
-#    Fondo y tipografía forzados de forma explícita para que la app se vea
-#    siempre igual sin importar el tema (claro/oscuro) del navegador del
-#    usuario. Todo el color vive en variables --token para mantener
-#    consistencia entre secciones.
 # ==============================================================================
 st.markdown("""
 <style>
@@ -48,369 +52,363 @@ st.markdown("""
         --coral:         #f25f5c;
         --coral-bg:      rgba(242, 95, 92, 0.12);
         --amber:         #f5a623;
+        --amber-bg:      rgba(245, 166, 35, 0.10);
     }
 
-    /* Fondo forzado de toda la app (independiente del tema del usuario) */
     .stApp { background-color: var(--bg) !important; }
     [data-testid="stHeader"] { background-color: rgba(0,0,0,0) !important; }
     .block-container { padding-top: 2.2rem; padding-bottom: 2.5rem; max-width: 1180px; }
 
-    /* Tipografía base + forzado de color en todo elemento de texto,
-       para que nunca herede blanco-sobre-blanco o negro-sobre-negro
-       del tema del sistema. */
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     [data-testid="stWidgetLabel"] p,
     [data-testid="stMarkdownContainer"] p,
     [data-testid="stCaptionContainer"],
     label, span, div { color: var(--text); }
-
     h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; }
 
-    /* ---------- ENCABEZADO ---------- */
     .eyebrow {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.14em;
-        color: var(--emerald);
-        text-transform: uppercase;
-        margin-bottom: 6px;
+        font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em;
+        color: var(--emerald); text-transform: uppercase; margin-bottom: 6px;
     }
     .main-title {
         font-family: 'Space Grotesk', sans-serif;
-        font-size: 2.3rem;
-        font-weight: 700;
-        color: var(--text);
-        margin: 0 0 4px 0;
-        line-height: 1.15;
+        font-size: 2.3rem; font-weight: 700; color: var(--text);
+        margin: 0 0 4px 0; line-height: 1.15;
     }
-    .subtitle {
-        font-size: 0.95rem;
-        color: var(--text-muted);
-        margin: 0 0 1.4rem 0;
-    }
+    .subtitle { font-size: 0.95rem; color: var(--text-muted); margin: 0 0 1.4rem 0; }
 
-    /* ---------- BANNER DE VEREDICTO (elemento distintivo) ---------- */
     .verdict {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 24px;
-        border-radius: 14px;
-        padding: 22px 28px;
-        margin: 4px 0 1.8rem 0;
-        border: 1px solid var(--border);
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 24px; border-radius: 14px; padding: 22px 28px;
+        margin: 4px 0 1.8rem 0; border: 1px solid var(--border);
     }
     .verdict-left { display: flex; align-items: center; gap: 16px; }
     .verdict-icon { font-size: 2rem; line-height: 1; }
     .verdict-label {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.7rem;
-        font-weight: 700;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color: var(--text-muted);
+        font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 700;
+        letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted);
         margin-bottom: 2px;
     }
     .verdict-headline {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.25rem;
-        font-weight: 700;
-        color: var(--text);
+        font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem;
+        font-weight: 700; color: var(--text);
     }
     .verdict-stats { display: flex; gap: 28px; }
     .verdict-stat { text-align: right; }
-    .verdict-stat-num {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.5rem;
-        font-weight: 700;
-    }
-    .verdict-stat-cap {
-        font-size: 0.68rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-    }
+    .verdict-stat-num { font-family: 'JetBrains Mono', monospace; font-size: 1.5rem; font-weight: 700; }
+    .verdict-stat-cap { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
 
-    /* ---------- TARJETAS ---------- */
     .panel-card {
-        background-color: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 1.3rem 1.4rem;
-        margin-bottom: 1rem;
-        height: 100%;
+        background-color: var(--surface); border: 1px solid var(--border);
+        border-radius: 12px; padding: 1.3rem 1.4rem; margin-bottom: 1rem; height: 100%;
     }
     .panel-title {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
-        font-weight: 700;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; font-weight: 700;
+        color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em;
         margin-bottom: 0.9rem;
     }
 
-    /* ---------- FUENTES DEL EXPERIMENTO (links) ---------- */
     input[type="text"] {
-        background-color: var(--surface-alt) !important;
-        color: var(--text) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 8px !important;
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.85rem !important;
+        background-color: var(--surface-alt) !important; color: var(--text) !important;
+        border: 1px solid var(--border) !important; border-radius: 8px !important;
+        font-family: 'JetBrains Mono', monospace !important; font-size: 0.85rem !important;
     }
     input[type="text"]:focus {
-        border-color: var(--emerald) !important;
-        box-shadow: 0 0 0 2px rgba(52,211,153,0.15) !important;
+        border-color: var(--emerald) !important; box-shadow: 0 0 0 2px rgba(52,211,153,0.15) !important;
     }
-    .link-status {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
-        margin-top: 6px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+    .embed-caption {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+        color: var(--text-muted); margin-top: 6px;
     }
-    .link-status.ok { color: var(--emerald); }
-    .link-status.empty { color: var(--text-muted); font-style: italic; }
-    .link-status a { color: var(--emerald); text-decoration: none; border-bottom: 1px dotted var(--emerald); }
 
-    /* ---------- MÉTRICAS NATIVAS ---------- */
     div[data-testid="stMetric"] {
-        background-color: var(--surface-alt);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 0.8rem 1rem;
+        background-color: var(--surface-alt); border: 1px solid var(--border);
+        border-radius: 10px; padding: 0.8rem 1rem;
     }
-    div[data-testid="stMetricValue"] {
-        color: var(--text) !important;
-        font-family: 'JetBrains Mono', monospace !important;
-    }
+    div[data-testid="stMetricValue"] { color: var(--text) !important; font-family: 'JetBrains Mono', monospace !important; }
     div[data-testid="stMetricLabel"] { color: var(--text-muted) !important; }
-
-    /* Toggle / slider labels con más peso */
     [data-testid="stWidgetLabel"] p { font-size: 0.9rem; font-weight: 500; }
 
     hr { border-color: var(--border); margin: 1.6rem 0; }
 
-    /* ---------- TABLA DE RESULTADOS ---------- */
+    .insight-box {
+        border-radius: 12px; padding: 18px 20px; border: 1px solid;
+        margin-top: 0.8rem; display: flex; gap: 14px; align-items: flex-start;
+    }
+    .insight-icon { font-size: 1.4rem; line-height: 1.2; }
+    .insight-tag {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; display: block;
+    }
+    .insight-text { font-size: 0.92rem; line-height: 1.5; color: var(--text); }
+
     .ab-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: 'Inter', sans-serif;
-        border-radius: 12px;
-        overflow: hidden;
-        border: 1px solid var(--border);
+        width: 100%; border-collapse: collapse; font-family: 'Inter', sans-serif;
+        border-radius: 12px; overflow: hidden; border: 1px solid var(--border);
     }
     .ab-table th {
-        background-color: var(--surface-alt);
-        color: var(--text-muted) !important;
-        text-align: left;
-        padding: 13px 20px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        background-color: var(--surface-alt); color: var(--text-muted) !important;
+        text-align: left; padding: 13px 20px; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
         border-bottom: 1px solid var(--border);
     }
     .ab-table td {
-        padding: 15px 20px;
-        font-size: 0.95rem;
-        color: var(--text) !important;
-        border-bottom: 1px solid var(--border);
-        font-family: 'JetBrains Mono', monospace;
+        padding: 15px 20px; font-size: 0.93rem; color: var(--text) !important;
+        border-bottom: 1px solid var(--border); font-family: 'JetBrains Mono', monospace;
     }
     .ab-table td.label-cell { font-family: 'Inter', sans-serif; font-weight: 600; }
-    .row-a { background-color: var(--surface); }
-    .row-b { background-color: var(--surface); box-shadow: inset 4px 0 0 0 var(--emerald); }
-    .row-cro { background-color: var(--surface-alt); }
-    .row-cro td { border-bottom: none; }
-
+    .row-live { background-color: var(--surface); box-shadow: inset 4px 0 0 0 var(--emerald); }
+    .row-plain { background-color: var(--surface); }
     .badge-live {
-        display: inline-block;
-        background-color: var(--emerald-bg);
-        color: var(--emerald) !important;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.65rem;
-        font-weight: 700;
-        padding: 3px 9px;
-        border-radius: 20px;
-        letter-spacing: 0.05em;
-        border: 1px solid rgba(52,211,153,0.35);
-        margin-left: 8px;
+        display: inline-block; background-color: var(--emerald-bg); color: var(--emerald) !important;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; font-weight: 700;
+        padding: 3px 9px; border-radius: 20px; letter-spacing: 0.05em;
+        border: 1px solid rgba(52,211,153,0.35); margin-left: 6px;
     }
-    .delta-chip {
-        display: inline-block;
-        padding: 3px 11px;
-        border-radius: 6px;
-        font-weight: 700;
-        font-size: 0.85rem;
+    .badge-winner {
+        display: inline-block; background-color: var(--amber-bg); color: var(--amber) !important;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; font-weight: 700;
+        padding: 3px 9px; border-radius: 20px; letter-spacing: 0.05em;
+        border: 1px solid rgba(245,166,35,0.35); margin-left: 6px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 3. INICIALIZACIÓN DEL SESSION STATE
-#    (evita que la app reinicie los valores al interactuar con los widgets)
+# 3. MODELO DE DATOS DEL EXPERIMENTO
+#    En vez de inventar Conversiones directamente, cada escenario se define
+#    con 3 parámetros de medios reales (Clics, CPC, CR% esperado) — igual
+#    que se arma un forecast de growth real. La Inversión y las Conversiones
+#    se DERIVAN de esos parámetros, y las conversiones incluyen variación
+#    estadística (aproximación normal a una binomial) para que cada
+#    simulación se sienta como un test real, no un número fijo mágico.
+#
+#    Los CR% esperados están calibrados para ser creíbles:
+#    - CTA: fricción eliminada -> lift fuerte pero realista (+~120%)
+#    - Otoño: mucho interés/clics, pero CR apenas sube (no llega a la meta)
+#    - Día de la Madre: pico de clics, pero el CR cae y el CPA empeora
+#      (el abandono de carrito le pasa factura real al costo por venta)
 # ==============================================================================
-defaults = {
-    "link_a": "",
-    "link_b": "",
-    "cta_activo": False,          # Botones CTA independientes
-    "formato_video": False,       # Cambio de formato estático -> video/reel
-    "etiqueta_descuento": False,  # Etiqueta de descuento visible
-    "inversion_extra": 0,         # Slider de inversión adicional en variante B
+import random
+
+ESTRATEGIAS = {
+    "base": {
+        "nombre": "Estado Base (creatividad original)",
+        "clics": 2500, "cpc": 0.20, "cr_mean": 0.030,
+        "insight": "Resultado de la campaña original, sin ningún cambio aplicado. "
+                    "Es el punto de comparación (control) para medir el impacto real "
+                    "de cada estrategia que se pruebe.",
+    },
+    "cta": {
+        "nombre": "1 · Implementar los botones CTA",
+        "clics": 2650, "cpc": 0.21, "cr_mean": 0.065,
+        "insight": "Al redirigir al usuario al modelo exacto, la tasa de conversión "
+                    "subió con fuerza. Se eliminó la pérdida de clientes en el "
+                    "proceso de búsqueda manual en la web, superando el impacto proyectado.",
+    },
+    "otono": {
+        "nombre": "2 · Colección Otoño-Invierno (cuero 100%)",
+        "clics": 4200, "cpc": 0.18, "cr_mean": 0.032,
+        "insight": "El anuncio generó muchos clics e interés por la calidad del cuero, "
+                    "pero al no contar aún con la experiencia optimizada de enlaces "
+                    "directos por tarjeta, la tasa de conversión final no alcanzó la meta del 10%.",
+    },
+    "diamadre": {
+        "nombre": "3 · Campaña Día de la Madre (ventas)",
+        "clics": 5200, "cpc": 0.22, "cr_mean": 0.028,
+        "insight": "Aunque hubo un pico de clics por la festividad, el anuncio genérico "
+                    "de carrusel sufrió abandono de carritos debido a que los usuarios se "
+                    "confunden al buscar las promociones dentro del sitio web principal — "
+                    "el CPA terminó siendo peor que el del control.",
+    },
 }
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+
+
+def simular_conversiones(clics: int, cr_mean: float, seed: int) -> int:
+    """
+    Simula conversiones reales a partir de una tasa de conversión esperada,
+    usando una aproximación normal a la distribución binomial (válida porque
+    clics es grande). Esto agrega variación estadística realista: cada
+    simulación puede dar un resultado ligeramente distinto, igual que un
+    test A/B real, en vez de un número fijo siempre idéntico.
+    """
+    rng = random.Random(seed)
+    media = clics * cr_mean
+    sigma = (clics * cr_mean * (1 - cr_mean)) ** 0.5
+    return max(round(rng.gauss(media, sigma)), 0)
+
+
+def calcular_cr(conversiones, clics):
+    return (conversiones / clics) * 100 if clics else 0.0
+
+def calcular_cpa(inversion, conversiones):
+    return (inversion / conversiones) if conversiones else 0.0
+
+def variacion_pct(valor_a, valor_b):
+    return ((valor_b - valor_a) / valor_a) * 100 if valor_a else 0.0
 
 
 # ==============================================================================
-# 4. ENCABEZADO
+# 4. SESSION STATE (todo con key=, sin value= manual -> sin bug de doble clic)
+# ==============================================================================
+st.session_state.setdefault("modo_media_a", "Link de Instagram")
+st.session_state.setdefault("modo_media_b", "Link de Instagram")
+st.session_state.setdefault("link_a", "")
+st.session_state.setdefault("link_b", "")
+st.session_state.setdefault("estrategia_b", "base")     # arranca en Estado Base
+st.session_state.setdefault("presupuesto_extra", 0)
+st.session_state.setdefault("simulacion_seed", 42)       # semilla de la variación estadística
+
+
+# ==============================================================================
+# 5. ENCABEZADO
 # ==============================================================================
 st.markdown('<div class="eyebrow">GROWTH LAB · ANALÍTICA DE EXPERIMENTOS</div>', unsafe_allow_html=True)
 st.markdown('<p class="main-title">🧪 AB Test Simulator</p>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="subtitle">Simulá el impacto de cambios creativos y de formato '
-    'sobre el rendimiento real de tu campaña — con veredicto de negocio en vivo.</p>',
-    unsafe_allow_html=True
-)
+st.markdown('<p class="subtitle">Elegí una estrategia y compará sus resultados en vivo contra el Estado Base.</p>', unsafe_allow_html=True)
 
-# Reservamos el espacio del banner de veredicto AQUÍ (arriba), pero lo
-# llenamos más abajo, una vez calculadas las métricas con los controles.
-# Esto permite que el elemento más importante (la decisión) quede primero
-# en el layout aunque dependa de datos calculados después en el código.
-verdict_slot = st.empty()
+verdict_slot = st.empty()  # se llena más abajo, una vez calculadas las métricas
 
 
 # ==============================================================================
-# 5. FUENTES DEL EXPERIMENTO (enlaces dinámicos A / B)
+# 6. FUENTES CREATIVAS (Instagram embed en vivo + alternativa de upload)
 # ==============================================================================
-def render_link_status(url: str, etiqueta: str):
-    """Confirma visualmente que el link fue capturado, con acceso directo."""
-    if url.strip():
-        st.markdown(
-            f'<div class="link-status ok">● {etiqueta} capturada &nbsp;·&nbsp; '
-            f'<a href="{url}" target="_blank" rel="noopener noreferrer">abrir enlace ↗</a></div>',
-            unsafe_allow_html=True
-        )
+def render_ig_embed(url: str, height: int = 600):
+    """Embebe un post/reel público de Instagram DENTRO de la app (no redirige)."""
+    embed_code = (
+        f'<blockquote class="instagram-media" data-instgrm-permalink="{url}" '
+        f'data-instgrm-version="14" style="background:#141922;border:1px solid #262c3a;'
+        f'border-radius:12px;margin:0;max-width:540px;width:100%;"></blockquote>'
+        f'<script async src="//www.instagram.com/embed.js"></script>'
+    )
+    components.html(embed_code, height=height, scrolling=True)
+
+
+def render_media_slot(prefix: str, etiqueta: str):
+    """
+    Entrada de creatividad para una variante: link de Instagram (embebido en
+    vivo) o subir imagen/video directamente. La detección de tipo de archivo
+    es automática (st.image para imágenes, st.video para videos), sin que el
+    usuario tenga que indicar el formato.
+    """
+    modo_key = f"modo_media_{prefix}"
+    st.radio(f"Fuente — {etiqueta}", options=["Link de Instagram", "Subir archivo"],
+             key=modo_key, horizontal=True)
+
+    if st.session_state[modo_key] == "Link de Instagram":
+        link_key = f"link_{prefix}"
+        st.text_input("Pegar link del post/reel", key=link_key,
+                       placeholder="https://www.instagram.com/p/...")
+        url = st.session_state[link_key].strip()
+        if url:
+            render_ig_embed(url)
+            st.markdown('<div class="embed-caption">Vista previa en vivo · solo posts públicos</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="embed-caption">○ Esperando el link...</div>', unsafe_allow_html=True)
     else:
-        st.markdown(
-            f'<div class="link-status empty">○ Esperando el link de la {etiqueta.lower()}...</div>',
-            unsafe_allow_html=True
-        )
+        file_key = f"file_{prefix}"
+        archivo = st.file_uploader("Subir imagen o video", type=["png", "jpg", "jpeg", "mp4", "mov", "webm"], key=file_key)
+        if archivo is not None:
+            # Detección automática del tipo de archivo: imagen -> st.image, video -> st.video
+            if archivo.type.startswith("video"):
+                st.video(archivo)
+            else:
+                st.image(archivo, use_container_width=True)
+        else:
+            st.markdown('<div class="embed-caption">○ Esperando el archivo...</div>', unsafe_allow_html=True)
 
-link_col1, link_col2 = st.columns(2)
-with link_col1:
-    st.session_state.link_a = st.text_input(
-        "Link Variante A (Original)",
-        value=st.session_state.link_a,
-        placeholder="https://... (ej. carrusel original)"
-    )
-    render_link_status(st.session_state.link_a, "Variante A")
 
-with link_col2:
-    st.session_state.link_b = st.text_input(
-        "Link Variante B (Optimizada)",
-        value=st.session_state.link_b,
-        placeholder="https://... (ej. reel / variante con cambios)"
-    )
-    render_link_status(st.session_state.link_b, "Variante B")
+media_col_a, media_col_b = st.columns(2)
+with media_col_a:
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown('<p class="panel-title">🅰 Control — Creatividad original</p>', unsafe_allow_html=True)
+    render_media_slot("a", "Variante A")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with media_col_b:
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown('<p class="panel-title">🅱 Variante en prueba</p>', unsafe_allow_html=True)
+    render_media_slot("b", "Variante B")
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.caption("💡 Al subir un archivo, la variante arranca en *Estado Base* y sus resultados cambian automáticamente al elegir una de las 3 estrategias abajo.")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 6. DATOS BASE DEL EXPERIMENTO (Variante A - Control, valores fijos)
-# ==============================================================================
-INVERSION_A = 500.0      # Inversión en Soles (S/)
-CLICS_A = 2500            # Clics totales
-CONVERSIONES_A = 75       # Conversiones totales
-
-# ------------------------------------------------------------------------------
-# 6.1 Lógica de simulación: partimos de los mismos valores base para B
-#     y les aplicamos el efecto de cada control activado.
-# ------------------------------------------------------------------------------
-inversion_b = INVERSION_A
-clics_b = CLICS_A
-conversiones_b = CONVERSIONES_A
-
-if st.session_state.cta_activo:
-    inversion_b += 50; clics_b += 300; conversiones_b += 25
-if st.session_state.formato_video:
-    inversion_b += 150; clics_b += 650; conversiones_b += 8
-if st.session_state.etiqueta_descuento:
-    inversion_b += 80; clics_b += 100; conversiones_b += 45
-
-inversion_b += st.session_state.inversion_extra  # presupuesto manual adicional
-
-
-# ==============================================================================
-# 7. PANEL PRINCIPAL: DOS COLUMNAS (Controles | Métricas en tiempo real)
+# 7. PANEL DE CONTROL: un único selector con las 4 opciones (Base + 3 estrategias)
 # ==============================================================================
 col_controles, col_metricas = st.columns([1, 1.4], gap="large")
 
+def _nueva_simulacion():
+    st.session_state["simulacion_seed"] += 1
+
 with col_controles:
     st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-    st.markdown('<p class="panel-title">⚙ Panel de control — Variante B</p>', unsafe_allow_html=True)
+    st.markdown('<p class="panel-title">⚙ Qué estás probando ahora</p>', unsafe_allow_html=True)
 
-    st.session_state.cta_activo = st.toggle(
-        "Añadir botones CTA independientes",
-        value=st.session_state.cta_activo,
-        help="Agrega un botón de acción propio en lugar de depender del link del post."
+    st.radio(
+        "Seleccioná el estado a simular:",
+        options=list(ESTRATEGIAS.keys()),
+        format_func=lambda k: ESTRATEGIAS[k]["nombre"],
+        key="estrategia_b",
     )
-    st.session_state.formato_video = st.toggle(
-        "Cambiar formato a video / Reel",
-        value=st.session_state.formato_video,
-        help="Convierte la pieza estática en un formato de video corto."
-    )
-    st.session_state.etiqueta_descuento = st.toggle(
-        "Activar etiqueta de descuento",
-        value=st.session_state.etiqueta_descuento,
-        help="Muestra un badge de oferta/descuento sobre la pieza creativa."
-    )
+
     st.markdown("<br>", unsafe_allow_html=True)
-    st.session_state.inversion_extra = st.slider(
-        "Presupuesto adicional para B (S/)",
+    st.slider(
+        "Presupuesto adicional (S/)",
         min_value=0, max_value=300, step=10,
-        value=st.session_state.inversion_extra,
-        help="Simula un aumento manual de inversión en la variante optimizada."
+        key="presupuesto_extra",
+        help="Simula qué pasaría si le sumás más presupuesto a la opción seleccionada. "
+             "Solo afecta esta vista en vivo, no los datos oficiales de la tabla."
     )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.button("🔄 Nueva simulación (variación estadística)", on_click=_nueva_simulacion, use_container_width=True)
+    st.caption("Cada simulación redibuja las conversiones con una pequeña variación real, "
+               "como en un test A/B de verdad — el CR% esperado se mantiene, pero el número exacto fluctúa.")
+
     st.markdown('</div>', unsafe_allow_html=True)
 
-    activos = []
-    if st.session_state.cta_activo: activos.append("CTA propio")
-    if st.session_state.formato_video: activos.append("Video/Reel")
-    if st.session_state.etiqueta_descuento: activos.append("Descuento")
-    resumen = ", ".join(activos) if activos else "Sin cambios (igual a la variante original)"
-    st.caption(f"**Cambios activos en B:** {resumen}")
-
 
 # ==============================================================================
-# 8. CÁLCULO DE MÉTRICAS (CR% y CPA) PARA AMBAS VARIANTES
+# 8. CÁLCULO DE MÉTRICAS: se derivan de Clics × CPC × CR% para cada escenario.
+#    "base" usa su valor esperado exacto (dato de control, sin ruido).
+#    Las 3 estrategias usan simular_conversiones() para incorporar variación
+#    estadística realista, controlada por simulacion_seed (cambia solo al
+#    apretar el botón "Nueva simulación").
 # ==============================================================================
-def calcular_cr(conversiones, clics):
-    """Tasa de conversión (%) = conversiones / clics * 100"""
-    return (conversiones / clics) * 100 if clics else 0.0
+for k, e in ESTRATEGIAS.items():
+    if k == "base":
+        conversiones = round(e["clics"] * e["cr_mean"])
+    else:
+        seed = st.session_state["simulacion_seed"] + hash(k) % 1000
+        conversiones = simular_conversiones(e["clics"], e["cr_mean"], seed)
+    e["conversiones"] = conversiones
+    e["inversion"] = e["clics"] * e["cpc"]
+    e["cr"] = calcular_cr(conversiones, e["clics"])
+    e["cpa"] = calcular_cpa(e["inversion"], conversiones)
 
-def calcular_cpa(inversion, conversiones):
-    """Costo por adquisición = inversión / conversiones"""
-    return (inversion / conversiones) if conversiones else 0.0
+BASE = ESTRATEGIAS["base"]
+# La ganadora real = menor CPA entre las 3 estrategias (excluye el estado base)
+CANDIDATAS = {k: v for k, v in ESTRATEGIAS.items() if k != "base"}
+GANADORA_KEY = min(CANDIDATAS, key=lambda k: CANDIDATAS[k]["cpa"])
 
-def variacion_pct(valor_a, valor_b):
-    """Variación porcentual: ((B - A) / A) * 100"""
-    return ((valor_b - valor_a) / valor_a) * 100 if valor_a else 0.0
+seleccionada_key = st.session_state["estrategia_b"]
+seleccionada = ESTRATEGIAS[seleccionada_key]
 
-cr_a = calcular_cr(CONVERSIONES_A, CLICS_A)
-cr_b = calcular_cr(conversiones_b, clics_b)
-cpa_a = calcular_cpa(INVERSION_A, CONVERSIONES_A)
-cpa_b = calcular_cpa(inversion_b, conversiones_b)
+# El presupuesto adicional se aplica SOLO a la vista en vivo (no a la tabla oficial)
+inversion_b_vivo = seleccionada["inversion"] + st.session_state["presupuesto_extra"]
+cr_b = seleccionada["cr"]
+cpa_b_vivo = calcular_cpa(inversion_b_vivo, seleccionada["conversiones"])
 
-delta_cr = variacion_pct(cr_a, cr_b)      # positivo = mejora (sube CR)
-delta_cpa = variacion_pct(cpa_a, cpa_b)   # negativo = mejora (baja CPA)
+delta_cr = variacion_pct(BASE["cr"], cr_b)
+delta_cpa = variacion_pct(BASE["cpa"], cpa_b_vivo)
+es_ganadora = (seleccionada_key == GANADORA_KEY)
+es_base = (seleccionada_key == "base")
+
 
 with col_metricas:
     st.markdown('<div class="panel-card">', unsafe_allow_html=True)
@@ -418,98 +416,97 @@ with col_metricas:
 
     m1, m2 = st.columns(2)
     with m1:
-        st.metric("Tasa de Conversión (CR%) — B", f"{cr_b:.2f}%",
-                   delta=f"{delta_cr:.1f}% vs A", delta_color="normal")
+        st.metric("Tasa de Conversión (CR%)", f"{cr_b:.2f}%",
+                   delta=None if es_base else f"{delta_cr:.1f}% vs Base", delta_color="normal")
     with m2:
-        st.metric("Costo por Adquisición (CPA) — B", f"S/ {cpa_b:.2f}",
-                   delta=f"{delta_cpa:.1f}% vs A", delta_color="inverse")
+        st.metric("Costo por Adquisición (CPA)", f"S/ {cpa_b_vivo:.2f}",
+                   delta=None if es_base else f"{delta_cpa:.1f}% vs Base", delta_color="inverse")
 
     st.markdown("<br>", unsafe_allow_html=True)
     m3, m4, m5 = st.columns(3)
-    with m3: st.metric("Inversión (B)", f"S/ {inversion_b:,.0f}")
-    with m4: st.metric("Clics (B)", f"{clics_b:,}")
-    with m5: st.metric("Conversiones (B)", f"{conversiones_b:,}")
+    with m3: st.metric("Inversión", f"S/ {inversion_b_vivo:,.0f}")
+    with m4: st.metric("Clics", f"{seleccionada['clics']:,}")
+    with m5: st.metric("Conversiones", f"{seleccionada['conversiones']:,}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+    if es_base:
+        tag_color, tag_bg, tag_icon, tag_text = "var(--text-muted)", "rgba(139,147,167,0.10)", "📍", "PUNTO DE PARTIDA"
+    elif es_ganadora:
+        tag_color, tag_bg, tag_icon, tag_text = "var(--emerald)", "var(--emerald-bg)", "🏆", "GANADORA DEFINITIVA"
+    else:
+        tag_color, tag_bg, tag_icon, tag_text = "var(--coral)", "var(--coral-bg)", "⚠️", "POR DEBAJO DEL BENCHMARK"
+
+    insight_html = (
+        f'<div class="insight-box" style="border-color:{tag_color};background-color:{tag_bg};">'
+        f'<div class="insight-icon">{tag_icon}</div>'
+        f'<div><span class="insight-tag" style="color:{tag_color};">{tag_text}</span>'
+        f'<div class="insight-text">{seleccionada["insight"]}</div></div></div>'
+    )
+    st.markdown(insight_html, unsafe_allow_html=True)
+
 
 # ==============================================================================
-# 9. BANNER DE VEREDICTO (se llena aquí, pero se muestra arriba por verdict_slot)
+# 9. BANNER DE VEREDICTO
 # ==============================================================================
-mejora_cr = delta_cr > 0
-mejora_cpa = delta_cpa < 0
-
-if mejora_cr and mejora_cpa:
-    icono, label, headline = "🚀", "RECOMENDACIÓN", "Escalar la Variante B — mejora conversión y reduce costo"
+if es_base:
+    icono, label = "📍", "ESTADO BASE"
+    headline = "Viendo la campaña original — elegí una estrategia para comparar"
+    color_borde, color_bg = "var(--text-muted)", "rgba(139,147,167,0.10)"
+elif es_ganadora:
+    icono, label = "🚀", "RECOMENDACIÓN"
+    headline = f'{seleccionada["nombre"]} — escalar de inmediato'
     color_borde, color_bg = "var(--emerald)", "var(--emerald-bg)"
-elif mejora_cr and not mejora_cpa:
-    icono, label, headline = "⚖️", "EVALUAR RENTABILIDAD", "B convierte más, pero también cuesta más por adquisición"
-    color_borde, color_bg = "var(--amber)", "rgba(245,166,35,0.10)"
-elif not mejora_cr and mejora_cpa:
-    icono, label, headline = "🔎", "REVISAR VOLUMEN", "B es más barata, pero no mejora la tasa de conversión"
-    color_borde, color_bg = "var(--amber)", "rgba(245,166,35,0.10)"
 else:
-    icono, label, headline = "🛑", "MANTENER CONTROL", "B no supera a la Original en ninguna métrica clave"
+    icono, label = "🛑", "MANTENER EL BENCHMARK"
+    headline = f'{seleccionada["nombre"]} queda por debajo de "{ESTRATEGIAS[GANADORA_KEY]["nombre"]}"'
     color_borde, color_bg = "var(--coral)", "var(--coral-bg)"
 
-color_num_cr = "var(--emerald)" if delta_cr >= 0 else "var(--coral)"
-color_num_cpa = "var(--emerald)" if delta_cpa <= 0 else "var(--coral)"
+color_num_cr = "var(--text-muted)" if es_base else ("var(--emerald)" if delta_cr >= 0 else "var(--coral)")
+color_num_cpa = "var(--text-muted)" if es_base else ("var(--emerald)" if delta_cpa <= 0 else "var(--coral)")
+txt_cr = "—" if es_base else f"{delta_cr:+.1f}%"
+txt_cpa = "—" if es_base else f"{delta_cpa:+.1f}%"
 
-verdict_slot.markdown(f"""
-<div class="verdict" style="background-color:{color_bg}; border-color:{color_borde};">
-    <div class="verdict-left">
-        <div class="verdict-icon">{icono}</div>
-        <div>
-            <div class="verdict-label">{label}</div>
-            <div class="verdict-headline">{headline}</div>
-        </div>
-    </div>
-    <div class="verdict-stats">
-        <div class="verdict-stat">
-            <div class="verdict-stat-num" style="color:{color_num_cr};">{delta_cr:+.1f}%</div>
-            <div class="verdict-stat-cap">CR vs A</div>
-        </div>
-        <div class="verdict-stat">
-            <div class="verdict-stat-num" style="color:{color_num_cpa};">{delta_cpa:+.1f}%</div>
-            <div class="verdict-stat-cap">CPA vs A</div>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+verdict_html = (
+    f'<div class="verdict" style="background-color:{color_bg};border-color:{color_borde};">'
+    f'<div class="verdict-left"><div class="verdict-icon">{icono}</div>'
+    f'<div><div class="verdict-label">{label}</div>'
+    f'<div class="verdict-headline">{headline}</div></div></div>'
+    f'<div class="verdict-stats">'
+    f'<div class="verdict-stat"><div class="verdict-stat-num" style="color:{color_num_cr};">{txt_cr}</div>'
+    f'<div class="verdict-stat-cap">CR vs Base</div></div>'
+    f'<div class="verdict-stat"><div class="verdict-stat-num" style="color:{color_num_cpa};">{txt_cpa}</div>'
+    f'<div class="verdict-stat-cap">CPA vs Base</div></div></div></div>'
+)
+verdict_slot.markdown(verdict_html, unsafe_allow_html=True)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 10. REPORTE VISUAL: TABLA HTML ESTILIZADA
+# 10. REPORTE VISUAL: TABLA COMPARATIVA (las 4 opciones, datos oficiales fijos)
+#     IMPORTANTE: todo el HTML se arma en una sola línea por fila (sin saltos
+#     de línea ni indentación) para evitar que Markdown lo interprete como
+#     bloque de código en vez de HTML.
 # ==============================================================================
-chip_cr_bg, chip_cr_fg = ("rgba(52,211,153,0.15)", "#34d399") if delta_cr >= 0 else ("rgba(242,95,92,0.15)", "#f25f5c")
-chip_cpa_bg, chip_cpa_fg = ("rgba(52,211,153,0.15)", "#34d399") if delta_cpa <= 0 else ("rgba(242,95,92,0.15)", "#f25f5c")
+filas = []
+for k, e in ESTRATEGIAS.items():
+    badges = ""
+    fila_clase = "row-live" if k == seleccionada_key else "row-plain"
+    if k == seleccionada_key:
+        badges += '<span class="badge-live">● LIVE</span>'
+    if k == GANADORA_KEY:
+        badges += '<span class="badge-winner">🏆 GANADORA</span>'
+    fila = (
+        f'<tr class="{fila_clase}"><td class="label-cell">{e["nombre"]} {badges}</td>'
+        f'<td>{e["cr"]:.2f}%</td><td>S/ {e["cpa"]:.2f}</td></tr>'
+    )
+    filas.append(fila)
 
-tabla_html = f"""
-<table class="ab-table">
-    <thead>
-        <tr><th>Resultados</th><th>CR%</th><th>CPA</th></tr>
-    </thead>
-    <tbody>
-        <tr class="row-a">
-            <td class="label-cell">A · Variante Original</td>
-            <td>{cr_a:.2f}%</td>
-            <td>S/ {cpa_a:.2f}</td>
-        </tr>
-        <tr class="row-b">
-            <td class="label-cell">B · Variante Optimizada <span class="badge-live">● LIVE</span></td>
-            <td>{cr_b:.2f}%</td>
-            <td>S/ {cpa_b:.2f}</td>
-        </tr>
-        <tr class="row-cro">
-            <td class="label-cell">CRO% · Variación B vs A</td>
-            <td><span class="delta-chip" style="background-color:{chip_cr_bg}; color:{chip_cr_fg};">{delta_cr:+.1f}%</span></td>
-            <td><span class="delta-chip" style="background-color:{chip_cpa_bg}; color:{chip_cpa_fg};">{delta_cpa:+.1f}%</span></td>
-        </tr>
-    </tbody>
-</table>
-"""
+tabla_html = (
+    '<table class="ab-table"><thead><tr><th>Resultados</th><th>CR%</th><th>CPA</th></tr></thead>'
+    f'<tbody>{"".join(filas)}</tbody></table>'
+)
 st.markdown(tabla_html, unsafe_allow_html=True)
 
-st.caption("CR% = Conversiones / Clics × 100 · CPA = Inversión / Conversiones · CRO% = ((B − A) / A) × 100")
+st.caption("CR% = Conversiones / Clics × 100 · CPA = Inversión / Conversiones · Datos oficiales (sin presupuesto adicional). La fila LIVE es la opción seleccionada arriba; GANADORA es la de mejor CPA entre las 3 estrategias.")
